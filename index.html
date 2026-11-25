@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meteo Cervasca</title>
+<style>
+:root{--bg:#e8edf0;--panel:#f6f8f9;--ink:#13222c;--mute:#5b6b76;--line:#cbd5db;--temp:#d9482b;--rain:#2878b5;--prob:#6a5acd}
+@media (prefers-color-scheme:dark){:root{--bg:#10191f;--panel:#17232b;--ink:#e6eef2;--mute:#8fa1ac;--line:#2b3b45;--temp:#ff7a59;--rain:#4aa3e0;--prob:#a99cff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Bahnschrift","Segoe UI Variable","Segoe UI",system-ui,sans-serif}
+main{max-width:1040px;margin:0 auto;padding:28px 20px 40px}
+header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:24px}
+h1{margin:0 0 6px;font-size:16px;font-weight:600;color:var(--mute)}
+.now{display:flex;align-items:center;gap:18px}
+.big{font-size:92px;line-height:.9;font-weight:300;letter-spacing:-.03em}
+.ico{font-size:56px;line-height:1}
+.desc{font-size:20px}
+.meta{font-size:13px;color:var(--mute);margin-top:4px}
+.tools{text-align:right;color:var(--mute);font-size:14px}
+.ctrl{display:flex;gap:8px;justify-content:flex-end;align-items:center;margin-top:6px}
+button,select{font:inherit;font-size:14px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:7px 12px;cursor:pointer}
+button:hover,select:hover{border-color:var(--mute)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px 16px 10px;margin-bottom:18px}
+.legend{display:flex;gap:20px;flex-wrap:wrap;font-size:14px;color:var(--mute);margin-bottom:8px}
+.legend i{display:inline-block;width:14px;height:4px;border-radius:2px;margin-right:6px;vertical-align:middle}
+#chart{position:relative;touch-action:pan-y}
+#chart svg{display:block;width:100%;height:auto}
+#tip{position:absolute;top:44px;pointer-events:none;background:var(--ink);color:var(--bg);font-size:13px;line-height:1.5;padding:6px 10px;border-radius:4px;white-space:nowrap;display:none}
+.days{display:grid;grid-template-columns:repeat(5,1fr)}
+.day{padding:4px 14px;border-left:1px solid var(--line)}
+.day:first-child{border-left:0;padding-left:0}
+.dn{font-size:15px;font-weight:600;text-transform:capitalize}
+.di{font-size:34px;margin:6px 0}
+.dt{font-size:18px}.dt span{color:var(--mute)}
+.dm{font-size:14px;color:var(--rain);margin-top:4px}
+#err{color:var(--temp);margin:0 0 14px;font-size:15px}
+footer{font-size:12px;color:var(--mute)}
+footer a{color:inherit}
+@media (max-width:640px){.days{grid-template-columns:repeat(2,1fr);row-gap:16px}.day:nth-child(odd){border-left:0;padding-left:0}.big{font-size:68px}.tools{text-align:left}.ctrl{justify-content:flex-start}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div>
+    <h1>Cervasca, San Bernardo</h1>
+    <div class="now">
+      <div class="big" id="cur">–</div>
+      <div class="ico" id="cico"></div>
+      <div>
+        <div class="desc" id="cdesc"></div>
+        <div class="meta" id="cmeta"></div>
+      </div>
+    </div>
+  </div>
+  <div class="tools">
+    <div id="upd"></div>
+    <div class="ctrl">
+      <select id="mod" aria-label="Modello meteo">
+        <option value="">Best match</option>
+        <option value="meteofrance_seamless">Météo-France (AROME)</option>
+        <option value="icon_seamless">DWD ICON-D2</option>
+        <option value="ecmwf_ifs025">ECMWF IFS</option>
+      </select>
+      <button id="ref" type="button">Aggiorna</button>
+    </div>
+  </div>
+</header>
+<p id="err" role="alert"></p>
+<section class="panel" aria-label="Previsioni orarie fino a fine periodo">
+  <div class="legend">
+    <span><i style="background:var(--temp)"></i>Temperatura (°C)</span>
+    <span><i style="background:var(--rain)"></i>Precipitazioni (mm)</span>
+    <span id="leg-prob"><i style="background:var(--prob)"></i>Probabilità di pioggia (%)</span>
+  </div>
+  <div id="chart"><div id="tip"></div></div>
+</section>
+<section class="panel" aria-label="Prossimi giorni"><div class="days" id="days"></div></section>
+<footer>Dati meteo: <a href="https://open-meteo.com/">Open-Meteo.com</a>, modello <span id="mname">Best match</span>. Aggiornamento automatico ogni 15 minuti.</footer>
+</main>
+<script>
+const BASE="https://api.open-meteo.com/v1/forecast?latitude=44.36&longitude=7.49&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,freezing_level_height&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Europe%2FBerlin&forecast_days=5";
+const $=id=>document.getElementById(id);
+const fmt=(v,d=1)=>v==null?"–":Number(v).toLocaleString("it-IT",{maximumFractionDigits:d});
+const date=t=>{const[a,b]=t.split("T");const[y,m,d]=a.split("-").map(Number);const[h,mi]=(b||"0:0").split(":").map(Number);return new Date(y,m-1,d,h,mi)};
+const dow=(t,f="short")=>date(t).toLocaleDateString("it-IT",{weekday:f});
+function wx(c){
+  if(c===0)return["☀️","Sereno"];
+  if(c===1)return["🌤️","Poco nuvoloso"];
+  if(c===2)return["⛅","Parzialmente nuvoloso"];
+  if(c===3)return["☁️","Coperto"];
+  if(c===45||c===48)return["🌫️","Nebbia"];
+  if(c>=51&&c<=57)return["🌦️","Pioviggine"];
+  if(c>=61&&c<=67)return["🌧️",c===61?"Pioggia debole":c===63?"Pioggia":c===65?"Pioggia forte":"Pioggia gelata"];
+  if(c>=71&&c<=77)return["❄️","Neve"];
+  if(c>=80&&c<=82)return["🌦️","Rovesci"];
+  if(c===85||c===86)return["🌨️","Rovesci di neve"];
+  if(c>=95)return["⛈️",c===95?"Temporale":"Temporale con grandine"];
+  return["·","–"];
+}
+function linePath(arr,X,Y){
+  let d="",open=false;
+  arr.forEach((v,i)=>{
+    if(v==null){open=false;return;}
+    d+=(open?"L":"M")+X(i).toFixed(1)+","+Y(v).toFixed(1);
+    open=true;
+  });
+  return d;
+}
+function render(d){
+  const h=d.hourly,now=d.current.time.slice(0,13)+":00";
+  let s=h.time.findIndex(t=>t>=now);if(s<0)s=0;
+  const e=h.time.length;
+  const TM=h.time.slice(s,e);
+  const T=(h.temperature_2m||[]).slice(s,e);
+  const PR=(h.precipitation_probability||[]).slice(s,e);
+  const P=(h.precipitation||[]).slice(s,e).map(v=>v==null?0:v);
+  const C=(h.weather_code||[]).slice(s,e);
+  const FZ=(h.freezing_level_height||[]).slice(s,e);
+  const hasPR=PR.some(v=>v!=null);
+  $("leg-prob").style.opacity=hasPR?"1":".35";
+
+  const n=TM.length,W=960,L=46,R=46,step=(W-L-R)/Math.max(1,n-1);
+  const X=i=>L+i*step;
+  const validT=T.filter(v=>v!=null);
+  const t0=validT.length?Math.floor(Math.min(...validT))-1:0;
+  const t1=validT.length?Math.ceil(Math.max(...validT))+1:10;
+  const YT=v=>205-(v-t0)/Math.max(1,t1-t0)*155;
+  const mm=Math.max(2,Math.ceil(Math.max(0,...P)));
+  const YP=v=>335-v/mm*85,YB=v=>335-v/100*85;
+
+  let g="";
+  for(let k=0;k<=4;k++){const v=t0+(t1-t0)*k/4,y=YT(v);
+    g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${L-8}" y="${y+4}" text-anchor="end" font-size="12" fill="var(--mute)">${Math.round(v)}°</text>`;}
+  g+=`<line x1="${L}" x2="${W-R}" y1="335" y2="335" stroke="var(--line)"/>`;
+  g+=`<text x="${L-8}" y="339" text-anchor="end" font-size="12" fill="var(--rain)">0</text><text x="${L-8}" y="${YP(mm)+4}" text-anchor="end" font-size="12" fill="var(--rain)">${mm}</text>`;
+  if(hasPR){
+    g+=`<text x="${W-R+8}" y="339" font-size="12" fill="var(--prob)">0%</text><text x="${W-R+8}" y="${YB(100)+4}" font-size="12" fill="var(--prob)">100%</text>`;
+  }
+  TM.forEach((t,i)=>{
+    const hh=+t.slice(11,13);
+    if(hh===0)g+=`<line x1="${X(i)}" x2="${X(i)}" y1="44" y2="340" stroke="var(--mute)" stroke-dasharray="3 4"/>`;
+    if(hh%12===0)g+=hh===0?`<text x="${X(i)+6}" y="362" font-size="13" font-weight="600" fill="var(--ink)">${dow(t)}</text>`:`<text x="${X(i)}" y="362" text-anchor="middle" font-size="12" fill="var(--mute)">${String(hh).padStart(2,"0")}:00</text>`;
+    if(i===0||hh%6===0)g+=`<text x="${X(i)}" y="26" text-anchor="middle" font-size="17">${wx(C[i])[0]}</text>`;
+    if(P[i]>0){const y=YP(P[i]);g+=`<rect x="${X(i)-step*.36}" y="${y}" width="${step*.72}" height="${335-y}" fill="var(--rain)" opacity=".85"/>`;}
+  });
+  if(hasPR)g+=`<path d="${linePath(PR,X,YB)}" fill="none" stroke="var(--prob)" stroke-width="1.6"/>`;
+  g+=`<path d="${linePath(T,X,YT)}" fill="none" stroke="var(--temp)" stroke-width="2.8" stroke-linejoin="round"/>`;
+  if(T[0]!=null)g+=`<circle cx="${X(0)}" cy="${YT(T[0])}" r="4.5" fill="var(--temp)"/>`;
+  g+=`<line id="hv" y1="44" y2="340" stroke="var(--ink)" stroke-width="1" style="display:none"/>`;
+
+  const box=$("chart"),tip=$("tip");
+  const oldSvg=box.querySelector("svg");if(oldSvg)oldSvg.remove();
+  box.insertAdjacentHTML("afterbegin",`<svg viewBox="0 0 ${W} 372" role="img" aria-label="Grafico di temperatura, precipitazioni e probabilità di pioggia per i prossimi 5 giorni">${g}</svg>`);
+  const svg=box.querySelector("svg"),hv=svg.querySelector("#hv");
+  box.onpointermove=ev=>{
+    const r=svg.getBoundingClientRect(),x=(ev.clientX-r.left)/r.width*W;
+    const i=Math.max(0,Math.min(n-1,Math.round((x-L)/step)));
+    hv.setAttribute("x1",X(i));hv.setAttribute("x2",X(i));hv.style.display="";
+    const pTxt=fmt(P[i])+" mm"+(PR[i]!=null?", "+PR[i]+"%":"");
+    const fzTxt=FZ[i]!=null?`<br>Zero termico: ${fmt(Math.round(FZ[i]),0)} m`:"";
+    tip.innerHTML=`<b style="text-transform:capitalize">${dow(TM[i])} ${TM[i].slice(11,16)}</b><br>${wx(C[i])[1]}<br>${T[i]!=null?fmt(T[i])+" °C":"–"}<br>${pTxt}${fzTxt}`;
+    tip.style.display="block";
+    tip.style.left=(X(i)/W*100)+"%";
+    tip.style.transform=i<n*.12?"translateX(0)":i>n*.88?"translateX(-100%)":"translateX(-50%)";
+  };
+  box.onpointerleave=()=>{tip.style.display="none";hv.style.display="none"};
+
+  const [ic,ds]=wx(d.current.weather_code);
+  $("cur").textContent=d.current.temperature_2m!=null?fmt(d.current.temperature_2m)+"°":"–";
+  $("cico").textContent=ic;
+  $("cdesc").textContent=ds;
+  const meta=[];
+  if(d.current.wind_speed_10m!=null)meta.push(`Vento ${fmt(d.current.wind_speed_10m,0)} km/h`);
+  if(d.current.relative_humidity_2m!=null)meta.push(`Umidità ${Math.round(d.current.relative_humidity_2m)}%`);
+  if(FZ[0]!=null)meta.push(`Zero termico ${fmt(Math.round(FZ[0]),0)} m`);
+  $("cmeta").textContent=meta.join(" · ");
+
+  const D=d.daily;
+  $("days").innerHTML=D.time.slice(0,5).map((t,i)=>{
+    const sum=D.precipitation_sum[i];
+    return `<div class="day"><div class="dn">${i===0?"Oggi":i===1?"Domani":dow(t,"long")}</div><div class="di">${wx(D.weather_code[i])[0]}</div><div class="dt"><b>${D.temperature_2m_max[i]!=null?Math.round(D.temperature_2m_max[i])+"°":"–"}</b> <span>${D.temperature_2m_min[i]!=null?Math.round(D.temperature_2m_min[i])+"°":"–"}</span></div><div class="dm">${sum>0?fmt(sum)+" mm":"Asciutto"}</div></div>`;
+  }).join("");
+}
+async function load(){
+  const sel=$("mod"),m=sel.value;
+  const url=m?BASE+"&models="+encodeURIComponent(m):BASE;
+  $("mname").textContent=sel.options[sel.selectedIndex].text;
+  try{
+    const r=await fetch(url,{cache:"no-store"});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    render(await r.json());
+    $("err").textContent="";
+    $("upd").textContent="Aggiornato alle "+new Date().toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+  }catch(e){
+    $("err").textContent="Errore: "+e.message;
+  }
+}
+try{const saved=localStorage.getItem("meteo_model");if(saved!==null)$("mod").value=saved;}catch(e){}
+$("mod").onchange=()=>{try{localStorage.setItem("meteo_model",$("mod").value);}catch(e){}load();};
+$("ref").onclick=load;
+load();setInterval(load,15*60*1000);
+</script>
+</body>
+</html>
